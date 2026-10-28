@@ -1,15 +1,19 @@
 # Virtual Environments
-.ugp/
+venv/
 .venv/
 env/
-venv/
 ENV/
+.ugp/
 
 # Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.patch
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
 
 # macOS metadata
 .DS_Store
