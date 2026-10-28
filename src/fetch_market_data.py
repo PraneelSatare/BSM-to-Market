@@ -7,6 +7,7 @@ European style (exercised only at expiration), matching the Black-Scholes assump
 """
 
 import os
+import sys
 import datetime
 import numpy as np
 import pandas as pd
@@ -16,6 +17,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from iv_utils import pcp_implied_forward
 
 
 def fetch_spx_data():
@@ -40,8 +46,8 @@ def fetch_spx_data():
     print(f"        1-Year Realized Volatility: {realized_vol_1y * 100:.2f}%")
     print(f"        30-Day Realized Volatility: {realized_vol_30d * 100:.2f}%")
 
-    # 2. Risk-free rate (3-month Treasury ^IRX) & S&P 500 dividend yield
-    print("  [2/4] Fetching risk-free rate & dividend yield …")
+    # 2. Risk-free rate (3-month Treasury ^IRX)
+    print("  [2/4] Fetching risk-free rate …")
     try:
         irx = yf.Ticker("^IRX").history(period="5d")
         r_rate = float(irx["Close"].iloc[-1]) / 100.0
@@ -49,10 +55,6 @@ def fetch_spx_data():
     except Exception:
         r_rate = 0.0409
         print(f"        Using default risk-free rate: {r_rate * 100:.2f}%")
-
-    # S&P 500 continuous dividend yield (standard index yield ~1.25%)
-    div_yield = 0.0125
-    print(f"        S&P 500 Continuous Dividend yield (D0): {div_yield * 100:.2f}%")
 
     # 3. Available European option expirations
     expirations = ticker.options
@@ -85,35 +87,61 @@ def fetch_spx_data():
             df_opt["dte"] = dte
             df_opt["T"] = T
 
-            # Market price: use mid if bid/ask valid, else lastPrice
+            # Require active quotes with bid > 0 and ask > bid
             has_bid_ask = (df_opt["bid"] > 0) & (df_opt["ask"] > df_opt["bid"])
-            df_opt["marketPrice"] = np.where(has_bid_ask, 0.5 * (df_opt["bid"] + df_opt["ask"]), df_opt["lastPrice"])
             df_opt["hasBidAsk"] = has_bid_ask
+            df_opt["bidAskSpread"] = np.where(has_bid_ask, df_opt["ask"] - df_opt["bid"], np.nan)
+            df_opt["marketPrice"] = np.where(has_bid_ask, 0.5 * (df_opt["bid"] + df_opt["ask"]), np.nan)
 
             all_options.append(df_opt)
 
     df_all = pd.concat(all_options, ignore_index=True)
 
-    # Filter liquid European options around spot (0.75 * S to 1.25 * S)
+    # Filter liquid European options with active bid/ask around spot (0.75 * S to 1.25 * S)
     df_filtered = df_all[
+        (df_all["hasBidAsk"]) &
         (df_all["strike"] >= 0.75 * spot) &
         (df_all["strike"] <= 1.25 * spot) &
-        (df_all["marketPrice"] > 0.50) &
-        ((df_all["openInterest"].fillna(0) > 0) | (df_all["volume"].fillna(0) > 0) | df_all["hasBidAsk"])
-    ].copy()
+        (df_all["marketPrice"] > 0.50)
+    ].copy().reset_index(drop=True)
 
     df_filtered["spot"] = spot
     df_filtered["r"] = r_rate
-    df_filtered["D0"] = div_yield
     df_filtered["realized_vol_1y"] = realized_vol_1y
     df_filtered["realized_vol_30d"] = realized_vol_30d
-    df_filtered["moneyness"] = df_filtered["strike"] / spot
+
+    # Infer risk-neutral forward price and dividend yield per expiry from put-call parity
+    fwd_map = {}
+    q_map = {}
+    for exp_str in selected_expiries:
+        sub_exp = df_filtered[df_filtered["expiration"] == exp_str]
+        calls_sub = sub_exp[sub_exp["optionType"] == "call"]
+        puts_sub = sub_exp[sub_exp["optionType"] == "put"]
+        T_sub = sub_exp["T"].iloc[0] if len(sub_exp) > 0 else 1.0
+        F_imp, q_imp = pcp_implied_forward(calls_sub, puts_sub, r_rate, T_sub, spot)
+        fwd_map[exp_str] = F_imp
+        q_map[exp_str] = q_imp
+        print(f"        Expiry {exp_str} (T = {T_sub:.4f}y): PCP Forward F = ${F_imp:.2f}, Implied Dividend Yield q = {q_imp * 100:.2f}%")
+
+    df_filtered["F_pcp"] = df_filtered["expiration"].map(fwd_map)
+    df_filtered["q_pcp"] = df_filtered["expiration"].map(q_map)
+    df_filtered["D0"] = df_filtered["q_pcp"]  # Set effective dividend yield to PCP-implied yield
+    df_filtered["moneyness_spot"] = df_filtered["strike"] / spot
+    df_filtered["moneyness_fwd"] = df_filtered["strike"] / df_filtered["F_pcp"]
+    df_filtered["log_moneyness"] = np.log(df_filtered["strike"] / df_filtered["F_pcp"])
+
+    # Out-of-the-money classification relative to forward price
+    df_filtered["is_otm"] = (
+        ((df_filtered["optionType"] == "put") & (df_filtered["strike"] <= df_filtered["F_pcp"])) |
+        ((df_filtered["optionType"] == "call") & (df_filtered["strike"] > df_filtered["F_pcp"]))
+    )
 
     out_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
     df_filtered.to_csv(out_file, index=False)
-    print(f"\n[✓] Saved {len(df_filtered)} European option quotes to: {out_file}")
+    print(f"\n[✓] Saved {len(df_filtered)} clean European option quotes to: {out_file}")
     print(f"    Underlying spot: ${spot:.2f}, Strikes: [{df_filtered['strike'].min():.0f}, {df_filtered['strike'].max():.0f}]")
     print(f"    Calls: {(df_filtered['optionType'] == 'call').sum()}, Puts: {(df_filtered['optionType'] == 'put').sum()}")
+    print(f"    OTM Quotes (for smile fitting): {df_filtered['is_otm'].sum()}")
     print(f"    Expirations: {list(df_filtered['expiration'].unique())}")
     return out_file
 

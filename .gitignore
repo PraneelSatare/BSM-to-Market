@@ -23,5 +23,5 @@ __pycache__/
 .vscode/
 .idea/
 
-# Large Book PDF (uncomment if you want to exclude copyrighted book)
-# DERIVATIVE_SECURITIES_AND_DIFFERENCE_METHODS_SECOND_--_You-lan_Z.pdf
+# Copyrighted reference books (do not commit to public repos)
+*.pdf
