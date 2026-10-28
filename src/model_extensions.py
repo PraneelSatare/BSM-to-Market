@@ -10,6 +10,7 @@ Evaluates 5 models progressively relaxing assumptions:
   4. Dupire (1994): Local Volatility Smile σ(K, T) capturing full skew and smile curvature
 """
 
+import sys
 import os
 import math
 import warnings
@@ -21,9 +22,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize, brentq
 
-from bs_analytical import bs_call, bs_put
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures")
+os.makedirs(FIGURES_DIR, exist_ok=True)
+
+from bs_analytical import bs_call, bs_put
 
 
 def bs_price_vectorized(S, E, T, r, vol, D0, is_call):
@@ -73,7 +81,7 @@ def merton_price(S, E, T, r, D0, is_call, sig_m, lam, mu_j, delta_j, N_terms=15)
 
 
 def run_research_models():
-    data_file = os.path.join(SCRIPT_DIR, "spx_options_market_data.csv")
+    data_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
     if not os.path.exists(data_file):
         raise FileNotFoundError(f"Missing {data_file}. Run fetch_market_data.py first.")
 
@@ -253,7 +261,7 @@ def run_research_models():
     fig.suptitle("Impact of Relaxing Black-Scholes PDE Assumptions with Literature Extensions",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(SCRIPT_DIR, "research_models_error_reduction.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "research_models_error_reduction.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved research_models_error_reduction.png")
 
@@ -299,7 +307,7 @@ def run_research_models():
 
     fig.suptitle("Progressive Error Elimination on European SPX Options", fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(SCRIPT_DIR, "research_models_price_fit.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "research_models_price_fit.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved research_models_price_fit.png")
 

@@ -3,6 +3,7 @@ Empirical Market Validation of Black-Scholes & Finite Difference Model.
 Uses real-world European-style option chain data from SPX (S&P 500 Index).
 """
 
+import sys
 import os
 import warnings
 import matplotlib
@@ -13,12 +14,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.optimize import brentq
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures")
+os.makedirs(FIGURES_DIR, exist_ok=True)
+
 from bs_analytical import bs_call, bs_put
 from heat_transform import BSHeatTransform
 from fdm_heat import HeatFDMSolver
 from main import quad_interp
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def compute_implied_vol(row):
@@ -53,7 +61,7 @@ def compute_implied_vol(row):
 
 
 def run_market_validation():
-    data_file = os.path.join(SCRIPT_DIR, "spx_options_market_data.csv")
+    data_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
     if not os.path.exists(data_file):
         raise FileNotFoundError(f"Missing {data_file}. Run fetch_market_data.py first.")
 
@@ -143,7 +151,7 @@ def run_market_validation():
     ax.grid(True, alpha=0.3)
     ax.set_ylim(5, 55)
     fig.tight_layout()
-    fig.savefig(os.path.join(SCRIPT_DIR, "market_volatility_smile.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "market_volatility_smile.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved market_volatility_smile.png")
 
@@ -180,7 +188,7 @@ def run_market_validation():
     fig.suptitle("Empirical European Market Pricing Comparison: Reality vs. Black-Scholes Model",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(SCRIPT_DIR, "market_pricing_errors.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "market_pricing_errors.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved market_pricing_errors.png")
 
@@ -198,7 +206,7 @@ def run_market_validation():
     cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.1)
     cbar.set_label("Implied Volatility (%)")
     fig.tight_layout()
-    fig.savefig(os.path.join(SCRIPT_DIR, "market_iv_surface.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "market_iv_surface.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved market_iv_surface.png")
 

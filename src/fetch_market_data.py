@@ -13,6 +13,9 @@ import pandas as pd
 import yfinance as yf
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
 
 def fetch_spx_data():
@@ -25,7 +28,7 @@ def fetch_spx_data():
     # 1. Historical underlying index prices for realized volatility
     print("  [1/4] Downloading 1-year historical daily prices for ^SPX …")
     hist = ticker.history(period="1y")
-    hist_file = os.path.join(SCRIPT_DIR, "spx_underlying_history.csv")
+    hist_file = os.path.join(DATA_DIR, "spx_underlying_history.csv")
     hist.to_csv(hist_file)
     spot = float(hist["Close"].iloc[-1])
     print(f"        Latest SPX Spot Close: ${spot:.2f}")
@@ -106,7 +109,7 @@ def fetch_spx_data():
     df_filtered["realized_vol_30d"] = realized_vol_30d
     df_filtered["moneyness"] = df_filtered["strike"] / spot
 
-    out_file = os.path.join(SCRIPT_DIR, "spx_options_market_data.csv")
+    out_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
     df_filtered.to_csv(out_file, index=False)
     print(f"\n[✓] Saved {len(df_filtered)} European option quotes to: {out_file}")
     print(f"    Underlying spot: ${spot:.2f}, Strikes: [{df_filtered['strike'].min():.0f}, {df_filtered['strike'].max():.0f}]")

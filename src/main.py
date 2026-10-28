@@ -4,6 +4,7 @@ equation (8.5) with finite differences.  Zhu et al., Derivative Securities and
 Difference Methods, 2nd ed.
 """
 
+import sys
 import os
 import warnings
 import matplotlib
@@ -12,11 +13,17 @@ matplotlib.use("Agg")
 import numpy as np
 import matplotlib.pyplot as plt
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures")
+os.makedirs(FIGURES_DIR, exist_ok=True)
+
 from bs_analytical import bs_call
 from heat_transform import BSHeatTransform
 from fdm_heat import HeatFDMSolver
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Book example (Sects. 2.6.5, 8.1.5, 8.2.1); book gives c(E,0)/E = 0.0994
 E, T, r, D0, sigma = 100.0, 1.0, 0.10, 0.05, 0.20
@@ -109,7 +116,7 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(SCRIPT_DIR, "prices_comparison.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "prices_comparison.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved prices_comparison.png")
 
@@ -174,7 +181,7 @@ def main():
 
     fig.suptitle("Error analysis", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(os.path.join(SCRIPT_DIR, "error_analysis.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "error_analysis.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved error_analysis.png")
     print(f"      observed order in time : implicit ≈ {np.log2(err_im[-2] / err_im[-1]):.2f},"
@@ -195,7 +202,7 @@ def main():
     ax.set_zlabel("u(x, τ̄)")
     ax.set_title("Heat-equation solution u(x, τ̄) — Crank-Nicolson (7.9)")
     fig.tight_layout()
-    fig.savefig(os.path.join(SCRIPT_DIR, "heat_solution_surface.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "heat_solution_surface.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved heat_solution_surface.png")
 
@@ -228,7 +235,7 @@ def main():
     fig.suptitle("Explicit scheme stability, condition (8.7)  α = Δτ̄/Δx² ≤ 1/2",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(os.path.join(SCRIPT_DIR, "stability_demo.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "stability_demo.png"), dpi=150)
     plt.close(fig)
     print(f"[✓] Saved stability_demo.png  (unstable α={s_un.alpha:.3f}, N={N_unstable};"
           f" stable α={s_st.alpha:.3f}, N={N_stable})")
@@ -295,7 +302,7 @@ def main():
     fig.suptitle(rf"Simultaneous $(M, N)$ Refinement at Constant Mesh Ratio $\alpha = \Delta\bar\tau / \Delta x^2 = {alpha_const:.2f}$",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(SCRIPT_DIR, "constant_alpha_analysis.png"), dpi=150)
+    fig.savefig(os.path.join(FIGURES_DIR, "constant_alpha_analysis.png"), dpi=150)
     plt.close(fig)
     print("[✓] Saved constant_alpha_analysis.png")
     print(f"      observed order at constant α: Explicit ≈ {np.log2(err_exp_const[-2] / err_exp_const[-1]):.2f},"
