@@ -1,0 +1,27 @@
+# Virtual Environments
+.ugp/
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Matplotlib cache
+.matplotlib/
+
+# IDE files
+.vscode/
+.idea/
+
+# Large Book PDF (uncomment if you want to exclude copyrighted book)
+# DERIVATIVE_SECURITIES_AND_DIFFERENCE_METHODS_SECOND_--_You-lan_Z.pdf
