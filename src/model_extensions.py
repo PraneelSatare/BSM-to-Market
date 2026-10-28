@@ -4,17 +4,19 @@ Progressive Error Reduction Analysis on European SPX Options.
 
 Evaluates 5 models progressively relaxing assumptions:
   0. Baseline: Classical Black-Scholes with Historical Realized Volatility
-  1. Leland (1985): Nonlinear PDE with Transaction Costs & Discrete Hedging (c = 20 bps, Δt = 1/252)
+  1. Leland (1985): Nonlinear PDE with Transaction Costs & Discrete Hedging (c = 20 bps round-trip, Δt = 1/252)
   2. ATM Calibrated: Forward Market Implied Volatility Term Structure (ATM Variance Risk Premium)
   3. Smile-Interpolated BS: Per-expiry polynomial smile interpolation in log-moneyness ln(K/F)
   4. Merton (1976): Jump-Diffusion PIDE capturing market crash probability and fat tails
 
-Both in-sample calibration and 5-fold cross-validation out-of-sample metrics are reported.
+Both in-sample calibration, 5-fold cross-validation out-of-sample testing,
+and Leave-One-Expiry-Out (LOEO) cross-validation are reported.
 """
 
 import sys
-import os
 import math
+from pathlib import Path
+
 import matplotlib
 matplotlib.use("Agg")
 
@@ -23,21 +25,26 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures")
-os.makedirs(FIGURES_DIR, exist_ok=True)
+PROJECT_ROOT = SCRIPT_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
+FIGURES_DIR = PROJECT_ROOT / "figures"
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-from bs_analytical import bs_call, bs_put
+from bs_analytical import bs_call
 from iv_utils import compute_iv, bs_price, pcp_implied_forward
 
 
 def merton_price(S, E, T, r, q, is_call, sig_m, lam, mu_j, delta_j, N_terms=15):
-    """Merton (1976) Jump-Diffusion analytical mixture series."""
+    """
+    Merton (1976) Jump-Diffusion analytical mixture series:
+        dS_t / S_{t-} = (r - q - λ κ) dt + σ_m dW_t + (Y - 1) dN_t
+    where N_t ~ Poisson(λ dt), ln Y ~ N(μ_J, δ_J²), and:
+        κ = E[Y - 1] = exp(μ_J + δ_J²/2) - 1.
+    """
     k_j = np.exp(mu_j + 0.5 * delta_j**2) - 1.0
     lam_p = lam * (1.0 + k_j)
     total = np.zeros_like(E, dtype=float)
@@ -50,14 +57,15 @@ def merton_price(S, E, T, r, q, is_call, sig_m, lam, mu_j, delta_j, N_terms=15):
 
 
 def run_research_models():
-    data_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
-    if not os.path.exists(data_file):
+    data_file = DATA_DIR / "spx_options_market_data.csv"
+    if not data_file.exists():
         raise FileNotFoundError(f"Missing {data_file}. Run fetch_market_data.py first.")
 
     raw_df = pd.read_csv(data_file)
     raw_df = raw_df[(raw_df["bid"] > 0) & (raw_df["ask"] > raw_df["bid"])].copy().reset_index(drop=True)
 
     spot = float(raw_df["spot"].iloc[0])
+    # Risk-free rate r from 13-week Treasury Bill (^IRX) at snapshot date
     r = float(raw_df["r"].iloc[0])
     sig_real = float(raw_df["realized_vol_1y"].iloc[0])
 
@@ -125,11 +133,13 @@ def run_research_models():
     # Model 1: Leland (1985) Transaction Costs & Discrete Hedging Friction
     # Relaxes: Frictionless continuous delta-hedging assumption
     # -------------------------------------------------------------------------
+    # c = 0.0020 represents a 20 bps round-trip transaction cost (10 bps each way)
+    # dt_hedge = 1/252 represents daily discrete portfolio rebalancing
     c_cost = 0.0020
     dt_hedge = 1.0 / 252.0
     leland_boost = np.sqrt(2.0 / np.pi) * (c_cost / (sig_real * np.sqrt(dt_hedge)))
     sig_leland = sig_real * np.sqrt(1.0 + leland_boost)
-    print(f"  [2/5] Model 1: Leland (1985) Transaction Costs (c = 20 bps, daily) …")
+    print(f"  [2/5] Model 1: Leland (1985) Transaction Costs (c = 20 bps round-trip, daily) …")
     print(f"        Leland Effective Volatility: {sig_leland * 100:.2f}% (boosted from {sig_real*100:.2f}%)")
     p_leland = bs_price(df["spot"].values, df["strike"].values, df["T"].values,
                         r, sig_leland, df["q_pcp"].values, is_call)
@@ -185,7 +195,7 @@ def run_research_models():
                      bounds=[(0.04, 0.22), (0.1, 2.5), (-0.30, 0.0), (0.05, 0.40)],
                      method="L-BFGS-B")
     sig_c, lam_j, mu_j, del_j = res_m.x
-    print(f"        Calibrated: λ = {lam_j:.2f}/yr, Mean Jump = {mu_j*100:.1f}%, Jump σ = {del_j*100:.1f}%, Cont. σ = {sig_c*100:.2f}%")
+    print(f"        Calibrated: λ = {lam_j:.2f}/yr, Mean Log-Jump = {mu_j*100:.1f}%, Jump σ = {del_j*100:.1f}%, Cont. σ = {sig_c*100:.2f}%")
     p_merton = merton_price(df["spot"].values, df["strike"].values, df["T"].values,
                             r, df["q_pcp"].values, is_call, sig_c, lam_j, mu_j, del_j)
     predictions["4. Merton (1976) Jumps"] = p_merton
@@ -199,6 +209,7 @@ def run_research_models():
     indices = np.random.permutation(n)
     folds = np.array_split(indices, 5)
 
+    oos_preds_atm = np.zeros(n)
     oos_preds_smile = np.zeros(n)
     oos_preds_merton = np.zeros(n)
 
@@ -206,6 +217,17 @@ def run_research_models():
         train_idx = np.setdiff1d(np.arange(n), test_idx)
         train_df = df.iloc[train_idx]
         test_df = df.iloc[test_idx]
+
+        # ATM Calibrated CV
+        for exp in expirations:
+            tr_sub_atm = train_df[(train_df["expiration"] == exp) & (np.abs(train_df["moneyness_fwd"] - 1.0) <= 0.02)]
+            atm_vol_tr = float(tr_sub_atm["impliedVol"].mean())
+            te_sub = test_df[test_df["expiration"] == exp]
+            if len(te_sub) > 0:
+                oos_preds_atm[te_sub.index] = bs_price(
+                    te_sub["spot"].values, te_sub["strike"].values, te_sub["T"].values,
+                    r, atm_vol_tr, te_sub["q_pcp"].values, (te_sub["optionType"] == "call").values
+                )
 
         # Smile CV
         for exp in expirations:
@@ -238,12 +260,51 @@ def run_research_models():
         )
 
     # -------------------------------------------------------------------------
+    # Leave-One-Expiry-Out (LOEO) Cross-Validation for Merton (1976)
+    # -------------------------------------------------------------------------
+    print("  Running Leave-One-Expiry-Out (LOEO) Cross-Validation for Merton (1976) …")
+    loeo_errors = []
+    loeo_results = {}
+    for test_exp in expirations:
+        train_df = df[df["expiration"] != test_exp].copy().reset_index(drop=True)
+        test_df = df[df["expiration"] == test_exp].copy().reset_index(drop=True)
+
+        is_call_tr = (train_df["optionType"] == "call").values
+        mkt_tr = train_df["marketPrice"].values
+
+        def loeo_obj(params):
+            sc, lj, mj, dj = params
+            pr = merton_price(train_df["spot"].values, train_df["strike"].values, train_df["T"].values,
+                              r, train_df["q_pcp"].values, is_call_tr, sc, lj, mj, dj)
+            return np.mean((mkt_tr - pr)**2)
+
+        res_loeo = minimize(loeo_obj, [0.10, 0.50, -0.15, 0.12],
+                            bounds=[(0.04, 0.22), (0.1, 2.5), (-0.30, 0.0), (0.05, 0.40)],
+                            method="L-BFGS-B")
+        sc_l, lj_l, mj_l, dj_l = res_loeo.x
+
+        is_call_te = (test_df["optionType"] == "call").values
+        pred_loeo = merton_price(test_df["spot"].values, test_df["strike"].values, test_df["T"].values,
+                                 r, test_df["q_pcp"].values, is_call_te, sc_l, lj_l, mj_l, dj_l)
+        err_l = test_df["marketPrice"].values - pred_loeo
+        rmse_l = np.sqrt(np.mean(err_l**2))
+        mae_l = np.mean(np.abs(err_l))
+        loeo_errors.extend(err_l)
+        T_val_te = float(test_df["T"].iloc[0])
+        loeo_results[test_exp] = {"rmse": rmse_l, "mae": mae_l, "T": T_val_te, "N": len(test_df),
+                                  "params": (lj_l, mj_l, dj_l, sc_l)}
+        print(f"    Held out {test_exp} (T={T_val_te:.3f}y, N={len(test_df)}): RMSE = ${rmse_l:.2f}, MAE = ${mae_l:.2f}")
+
+    loeo_overall_rmse = np.sqrt(np.mean(np.array(loeo_errors)**2))
+    loeo_overall_mae = np.mean(np.abs(np.array(loeo_errors)))
+
+    # -------------------------------------------------------------------------
     # Performance Evaluation & Error Reduction Reporting
     # -------------------------------------------------------------------------
     print("\n" + "=" * 82)
     print("IN-SAMPLE MODEL EVALUATION ON OTM EUROPEAN SPX OPTIONS")
     print("=" * 82)
-    print(f"{'Model / Extension':<30} {'RMSE ($)':>10} {'MAE ($)':>10} {'Max Err ($)':>12} {'RMSE Drop (%)':>15}")
+    print(f"{'Model / Extension':<30} {'RMSE ($)':>10} {'MAE ($)':>10} {'Max Err ($)':>12} {'RMSE Change (%)':>17}")
     print("-" * 82)
 
     metrics = []
@@ -254,30 +315,41 @@ def run_research_models():
         rmse = np.sqrt(np.mean(err**2))
         mae = np.mean(np.abs(err))
         max_err = np.max(np.abs(err))
-        drop_pct = (1.0 - (rmse / rmse_base)) * 100.0
+        change_pct = ((rmse - rmse_base) / rmse_base) * 100.0
         metrics.append({
             "model": name,
             "rmse": rmse,
             "mae": mae,
             "max_err": max_err,
-            "drop_pct": drop_pct
+            "change_pct": change_pct
         })
-        drop_str = "0.00% (Baseline)" if "Baseline" in name else f"-{drop_pct:5.2f}%"
-        print(f"{name:<30} {rmse:10.2f} {mae:10.2f} {max_err:12.2f} {drop_str:>15}")
+        change_str = "0.00% (Baseline)" if "Baseline" in name else f"{change_pct:+6.2f}%"
+        print(f"{name:<30} {rmse:10.2f} {mae:10.2f} {max_err:12.2f} {change_str:>17}")
 
     print("=" * 82)
 
     # Out-of-sample summary
+    rmse_atm_oos = np.sqrt(np.mean((market_price - oos_preds_atm)**2))
+    mae_atm_oos = np.mean(np.abs(market_price - oos_preds_atm))
     rmse_smile_oos = np.sqrt(np.mean((market_price - oos_preds_smile)**2))
     mae_smile_oos = np.mean(np.abs(market_price - oos_preds_smile))
     rmse_merton_oos = np.sqrt(np.mean((market_price - oos_preds_merton)**2))
     mae_merton_oos = np.mean(np.abs(market_price - oos_preds_merton))
 
     print("\n" + "=" * 82)
-    print("OUT-OF-SAMPLE 5-FOLD CROSS-VALIDATION (Calibrated Models)")
+    print("OUT-OF-SAMPLE 5-FOLD CROSS-VALIDATION (Random Split Across Strikes)")
     print("=" * 82)
+    print(f"  ATM Calibrated        : In-Sample RMSE = ${metrics[2]['rmse']:.2f} | Out-of-Sample RMSE = ${rmse_atm_oos:.2f} (MAE: ${mae_atm_oos:.2f})")
     print(f"  Smile-Interpolated BS : In-Sample RMSE = ${metrics[3]['rmse']:.2f} | Out-of-Sample RMSE = ${rmse_smile_oos:.2f} (MAE: ${mae_smile_oos:.2f})")
     print(f"  Merton (1976) Jumps   : In-Sample RMSE = ${metrics[4]['rmse']:.2f} | Out-of-Sample RMSE = ${rmse_merton_oos:.2f} (MAE: ${mae_merton_oos:.2f})")
+    print("=" * 82)
+
+    print("\n" + "=" * 82)
+    print("LEAVE-ONE-EXPIRY-OUT (LOEO) CROSS-VALIDATION (Cross-Maturity Extrapolation)")
+    print("=" * 82)
+    print(f"  Merton (1976) Jumps   : Overall LOEO RMSE = ${loeo_overall_rmse:.2f} | Overall LOEO MAE = ${loeo_overall_mae:.2f}")
+    for exp, res_dict in loeo_results.items():
+        print(f"    - Held-out {exp} (T={res_dict['T']:.3f}y): RMSE = ${res_dict['rmse']:.2f}, MAE = ${res_dict['mae']:.2f}")
     print("=" * 82)
 
     # Moneyness breakdown for each model
@@ -316,12 +388,12 @@ def run_research_models():
     ax1.grid(axis="y", alpha=0.3)
     for bar, m in zip(bars1, metrics):
         h = bar.get_height()
-        label = f"${h:.2f}" if "Baseline" in m["model"] else f"${h:.2f}\n(-{m['drop_pct']:.1f}%)"
+        label = f"${h:.2f}" if "Baseline" in m["model"] else f"${h:.2f}\n({m['change_pct']:+.1f}%)"
         ax1.annotate(label, xy=(bar.get_x() + bar.get_width() / 2, h),
                      xytext=(0, 4), textcoords="offset points", ha="center", va="bottom", fontsize=8.5, fontweight="bold")
 
     bars2 = ax2.bar(names_short, maes, color=colors, edgecolor="black", width=0.55)
-    ax2.axhline(median_spread, color="black", linestyle="--", lw=1.2, label=f"Median Bid-Ask Spread (${median_spread:.2f})")
+    ax2.axhline(median_spread, color="black", linestyle="--", lw=1.2, label=f"Median OTM Bid-Ask Spread (${median_spread:.2f})")
     ax2.set_ylabel("Mean Absolute Error ($)", fontsize=11)
     ax2.set_title("Mean Absolute Error (MAE) vs. Bid-Ask Spread", fontsize=12, fontweight="bold")
     ax2.legend(fontsize=9, loc="upper right")
@@ -334,7 +406,7 @@ def run_research_models():
     fig.suptitle("Impact of Relaxing Black-Scholes PDE Assumptions with Literature Extensions",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(FIGURES_DIR, "research_models_error_reduction.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "research_models_error_reduction.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved research_models_error_reduction.png")
 
@@ -345,7 +417,6 @@ def run_research_models():
 
     sub_exp = expirations[0]
     sub_df = df[df["expiration"] == sub_exp].copy().sort_values("strike")
-    idx_sub = sub_df.index
     F_sub = exp_fwd[sub_exp]
 
     sub_calls = sub_df[sub_df["optionType"] == "call"]
@@ -382,7 +453,7 @@ def run_research_models():
 
     fig.suptitle("Progressive Error Elimination on European SPX Options", fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(FIGURES_DIR, "research_models_price_fit.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "research_models_price_fit.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved research_models_price_fit.png")
 

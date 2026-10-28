@@ -4,7 +4,8 @@ Uses real-world European-style option chain data from SPX (S&P 500 Index).
 """
 
 import sys
-import os
+from pathlib import Path
+
 import matplotlib
 matplotlib.use("Agg")
 
@@ -12,16 +13,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures")
-os.makedirs(FIGURES_DIR, exist_ok=True)
+PROJECT_ROOT = SCRIPT_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
+FIGURES_DIR = PROJECT_ROOT / "figures"
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-from bs_analytical import bs_call, bs_put
+from bs_analytical import bs_call
 from heat_transform import BSHeatTransform
 from fdm_heat import HeatFDMSolver
 from main import quad_interp
@@ -29,12 +30,13 @@ from iv_utils import compute_iv, bs_price, pcp_implied_forward
 
 
 def run_market_validation():
-    data_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
-    if not os.path.exists(data_file):
+    data_file = DATA_DIR / "spx_options_market_data.csv"
+    if not data_file.exists():
         raise FileNotFoundError(f"Missing {data_file}. Run fetch_market_data.py first.")
 
     df = pd.read_csv(data_file)
     spot = float(df["spot"].iloc[0])
+    # Risk-free rate r is obtained from 13-week Treasury Bill (^IRX) at the snapshot date
     r = float(df["r"].iloc[0])
     sig_real_1y = float(df["realized_vol_1y"].iloc[0])
     sig_real_30d = float(df["realized_vol_30d"].iloc[0])
@@ -78,7 +80,7 @@ def run_market_validation():
     print("=" * 76)
     print(f"  Underlying Asset: ^SPX (S&P 500 Index)   Spot S = ${spot:.2f}")
     print(f"  Style: Strictly European (Cash-settled, no early exercise)")
-    print(f"  Risk-Free Rate r = {r * 100:.2f}%")
+    print(f"  Risk-Free Rate r = {r * 100:.2f}% (13-week T-Bill ^IRX at snapshot)")
     print(f"  1-Year Realized Volatility: {sig_real_1y * 100:.2f}%")
     print(f"  30-Day Realized Volatility: {sig_real_30d * 100:.2f}%")
     print(f"  Total Valid European Quotes: {len(df)} across {len(expirations)} maturities: {maturities_str}")
@@ -137,10 +139,10 @@ def run_market_validation():
     num_diff = abs(v_fdm_atm - v_bs_atm)
     rel_diff_pct = (num_diff / v_bs_atm) * 100.0
 
-    print(f"        Diffusion scale σ√T = {diff_scale:.4f}, Scaled x-grid: [{x_l:.2f}, {x_u:.2f}], Δx = {solver.dx:.5f}")
+    print(f"        Diffusion scale σ√T ≈ {diff_scale:.3f}, Scaled x-grid: [{x_l:.2f}, {x_u:.2f}], Δx = {solver.dx:.5f}")
     print(f"        ATM Strike: ${E_atm:.0f}, Expiry: {sample_opt['expiration']} (T = {T_atm:.4f}y)")
     print(f"        FDM Price: ${v_fdm_atm:.4f}  |  BS Analytical Price: ${v_bs_atm:.4f}")
-    print(f"        Numerical Difference: ${num_diff:.4f}  ({rel_diff_pct:.4f}% relative error)")
+    print(f"        Numerical Difference: ${num_diff:.4f}  ({rel_diff_pct:.4f}% relative error, about one cent)")
     print(f"        Actual Market Price: ${sample_opt['marketPrice']:.2f}")
     print(f"        Market vs. Realized-Model Gap: ${sample_opt['marketPrice'] - v_bs_atm:.2f}")
 
@@ -179,7 +181,7 @@ def run_market_validation():
     ax.grid(True, alpha=0.3)
     ax.set_ylim(8, 45)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGURES_DIR, "market_volatility_smile.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "market_volatility_smile.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved market_volatility_smile.png")
 
@@ -222,7 +224,7 @@ def run_market_validation():
     fig.suptitle("Empirical European Market Pricing Comparison: Reality vs. Constant-Volatility Black-Scholes",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(FIGURES_DIR, "market_pricing_errors.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "market_pricing_errors.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved market_pricing_errors.png")
 
@@ -241,7 +243,7 @@ def run_market_validation():
     cbar = fig.colorbar(scatter, ax=ax, shrink=0.6, pad=0.1)
     cbar.set_label("Implied Volatility (%)")
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGURES_DIR, "market_iv_surface.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "market_iv_surface.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved market_iv_surface.png")
 
@@ -275,14 +277,31 @@ def run_market_validation():
     print("=" * 76)
     atm_sub = df[np.abs(df["moneyness_fwd"] - 1.0) <= 0.02]
     avg_atm_iv = float(atm_sub["impliedVol"].dropna().mean() * 100)
-    max_otm_put_iv = float(df[(df["optionType"] == "put") & (df["is_otm"])]["impliedVol"].dropna().max() * 100)
+    
+    # Specific maturity ATM IVs:
+    atm_by_exp = {}
+    for exp in expirations:
+        sub_e_atm = df[(df["expiration"] == exp) & (np.abs(df["moneyness_fwd"] - 1.0) <= 0.02)]
+        atm_by_exp[exp] = float(sub_e_atm["impliedVol"].dropna().mean() * 100)
+    
+    # Peak OTM put IV:
+    otm_puts_all = df[(df["optionType"] == "put") & (df["is_otm"]) & (df["impliedVol"].notna())]
+    max_otm_put_row = otm_puts_all.loc[otm_puts_all["impliedVol"].idxmax()]
+    max_otm_put_iv = float(max_otm_put_row["impliedVol"] * 100)
+    max_otm_put_exp = max_otm_put_row["expiration"]
+    max_otm_put_moneyness = float(max_otm_put_row["moneyness_fwd"])
+    max_otm_put_strike = float(max_otm_put_row["strike"])
 
     print(f"\n  Key Empirical Insights for European Options:")
-    print(f"  • Average ATM Market Implied Volatility: {avg_atm_iv:.2f}%")
+    print(f"  • Mean ATM Market Implied Volatility:    {avg_atm_iv:.2f}% (across all expiries)")
+    for exp in expirations:
+        sub_e = df[df["expiration"] == exp]
+        T_e = sub_e["T"].iloc[0]
+        print(f"    - {exp} (T = {T_e:.3f}y): ATM IV = {atm_by_exp[exp]:.2f}% (spread vs RV {sig_real_1y*100:.2f}%: {atm_by_exp[exp]-sig_real_1y*100:+.2f}%)")
     print(f"  • Historical Realized Volatility:        {sig_real_1y * 100:.2f}%")
-    print(f"  • Variance Risk Premium (ATM IV − RV):   {avg_atm_iv - sig_real_1y * 100:+.2f}%")
-    print(f"  • Peak OTM Put Implied Volatility:       {max_otm_put_iv:.2f}%")
+    print(f"  • Peak OTM Put Implied Volatility:       {max_otm_put_iv:.2f}% (at K = ${max_otm_put_strike:.0f}, K/F = {max_otm_put_moneyness:.2f}, {max_otm_put_exp})")
     print(f"  • Traded Option Median Bid-Ask Spread:   ${median_spread:.2f} (Mean: ${mean_spread:.2f})")
+    print(f"  • Liquid OTM Median Bid-Ask Spread:      ${float((otm_df['ask'] - otm_df['bid']).median()):.2f} (Mean: ${float((otm_df['ask'] - otm_df['bid']).mean()):.2f})")
     print("\nDone.")
 
 

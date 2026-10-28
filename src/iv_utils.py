@@ -8,14 +8,15 @@ compute_iv          : Brent's method Black-Scholes IV solver
 bs_price            : vectorized BS pricing for mixed calls/puts
 """
 
-import os
 import sys
+from pathlib import Path
+
 import numpy as np
 from scipy.optimize import brentq
 
-_DIR = os.path.dirname(os.path.abspath(__file__))
-if _DIR not in sys.path:
-    sys.path.insert(0, _DIR)
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from bs_analytical import bs_call, bs_put
 

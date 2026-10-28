@@ -12,9 +12,9 @@ import numpy as np
 class BSHeatTransform:
 
     def __init__(self, E, T, r, sigma, D0=0.0):
-        self.E, self.T, self.r, self.sigma, self.D0 = E, T, r, sigma, D0
-        self.k = 2.0 * (r - D0) / sigma**2
-        self.mu = r - D0 - 0.5 * sigma**2
+        self.E, self.T, self.r, self.sigma, self.D0 = float(E), float(T), float(r), float(sigma), float(D0)
+        self.k = 2.0 * (self.r - self.D0) / self.sigma**2 if self.sigma > 0 else 0.0
+        self.mu = self.r - self.D0 - 0.5 * self.sigma**2
 
     def tau_bar_max(self):
         """τ̄ at t = 0."""
@@ -42,10 +42,14 @@ class BSHeatTransform:
         return np.maximum(np.exp(np.asarray(x, dtype=float)) - 1.0, 0.0)
 
     def call_bc_lower(self, tau_bar):
-        """u(x_l, τ̄) = 0   — Sect. 8.2.1."""
+        """u(x_l, τ̄) = 0 as S -> 0 (deep out-of-the-money call)."""
         return 0.0
 
     def call_bc_upper(self, x_u, tau_bar):
-        """u(x_u, τ̄) = (e^{x_u - (k-1)τ̄} - 1) e^{kτ̄},  k = 2(r - D0)/σ²   — Sect. 8.2.1."""
-        k = self.k
-        return (np.exp(x_u - (k - 1.0) * tau_bar) - 1.0) * np.exp(k * tau_bar)
+        """
+        As S -> ∞, V(S,t) ~ S e^{-D0(T-t)} - E e^{-r(T-t)}.
+        Dividing by E e^{-r(T-t)} and substituting S/E = e^{x - μ(T-t)} with μ = r - D0 - σ²/2:
+            u(x_u, τ̄) = e^{x_u + τ̄} - 1
+        This exact asymptotic boundary eliminates r and D0 completely.
+        """
+        return np.exp(x_u + np.asarray(tau_bar, dtype=float)) - 1.0

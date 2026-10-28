@@ -2,31 +2,45 @@
 Fetch real-world market data for SPX (S&P 500 Index) European option chains
 and underlying historical prices to benchmark Black-Scholes and PDE solvers.
 
-Note: Unlike SPY (American style), SPX options are cash-settled and strictly
-European style (exercised only at expiration), matching the Black-Scholes assumptions.
+Note:
+  - SPX options are cash-settled and strictly European style (exercised only
+    at expiration), matching Black-Scholes boundary conditions.
+  - CAUTION: Running this script queries live Yahoo Finance data and overwrites
+    data/spx_options_market_data.csv and data/spx_underlying_history.csv,
+    which will change all empirical numbers reported in the README.
 """
 
-import os
 import sys
 import datetime
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+PROJECT_ROOT = SCRIPT_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 from iv_utils import pcp_implied_forward
 
 
-def fetch_spx_data():
+def fetch_spx_data(reference_date=None):
+    """
+    Fetch S&P 500 index history and representative monthly European option chains.
+    Optionally pass a reference_date (datetime.date) to calculate time to maturity T;
+    defaults to datetime.date.today().
+    """
+    today = reference_date or datetime.date.today()
+    snapshot_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
     print("=" * 72)
     print("Fetching Real European Market Data: ^SPX (S&P 500 Index)")
+    print(f"  Reference Date for DTE calculation: {today}")
     print("=" * 72)
 
     ticker = yf.Ticker("^SPX")
@@ -34,7 +48,7 @@ def fetch_spx_data():
     # 1. Historical underlying index prices for realized volatility
     print("  [1/4] Downloading 1-year historical daily prices for ^SPX …")
     hist = ticker.history(period="1y")
-    hist_file = os.path.join(DATA_DIR, "spx_underlying_history.csv")
+    hist_file = DATA_DIR / "spx_underlying_history.csv"
     hist.to_csv(hist_file)
     spot = float(hist["Close"].iloc[-1])
     print(f"        Latest SPX Spot Close: ${spot:.2f}")
@@ -46,21 +60,20 @@ def fetch_spx_data():
     print(f"        1-Year Realized Volatility: {realized_vol_1y * 100:.2f}%")
     print(f"        30-Day Realized Volatility: {realized_vol_30d * 100:.2f}%")
 
-    # 2. Risk-free rate (3-month Treasury ^IRX)
-    print("  [2/4] Fetching risk-free rate …")
+    # 2. Risk-free rate (13-week Treasury Bill ^IRX)
+    print("  [2/4] Fetching risk-free rate from ^IRX (13-week Treasury) …")
     try:
         irx = yf.Ticker("^IRX").history(period="5d")
         r_rate = float(irx["Close"].iloc[-1]) / 100.0
         print(f"        Current 13-week Treasury rate (^IRX): {r_rate * 100:.2f}%")
     except Exception:
-        r_rate = 0.0409
+        r_rate = 0.04088
         print(f"        Using default risk-free rate: {r_rate * 100:.2f}%")
 
     # 3. Available European option expirations
     expirations = ticker.options
     print(f"  [3/4] Found {len(expirations)} total European expiration dates.")
 
-    today = datetime.date.today()
     target_days = [30, 60, 90]
     selected_expiries = []
     for td in target_days:
@@ -109,6 +122,7 @@ def fetch_spx_data():
     df_filtered["r"] = r_rate
     df_filtered["realized_vol_1y"] = realized_vol_1y
     df_filtered["realized_vol_30d"] = realized_vol_30d
+    df_filtered["snapshot_timestamp"] = snapshot_timestamp
 
     # Infer risk-neutral forward price and dividend yield per expiry from put-call parity
     fwd_map = {}
@@ -117,7 +131,7 @@ def fetch_spx_data():
         sub_exp = df_filtered[df_filtered["expiration"] == exp_str]
         calls_sub = sub_exp[sub_exp["optionType"] == "call"]
         puts_sub = sub_exp[sub_exp["optionType"] == "put"]
-        T_sub = sub_exp["T"].iloc[0] if len(sub_exp) > 0 else 1.0
+        T_sub = float(sub_exp["T"].iloc[0]) if len(sub_exp) > 0 else 1.0
         F_imp, q_imp = pcp_implied_forward(calls_sub, puts_sub, r_rate, T_sub, spot)
         fwd_map[exp_str] = F_imp
         q_map[exp_str] = q_imp
@@ -125,7 +139,7 @@ def fetch_spx_data():
 
     df_filtered["F_pcp"] = df_filtered["expiration"].map(fwd_map)
     df_filtered["q_pcp"] = df_filtered["expiration"].map(q_map)
-    df_filtered["D0"] = df_filtered["q_pcp"]  # Set effective dividend yield to PCP-implied yield
+    df_filtered["D0"] = df_filtered["q_pcp"]
     df_filtered["moneyness_spot"] = df_filtered["strike"] / spot
     df_filtered["moneyness_fwd"] = df_filtered["strike"] / df_filtered["F_pcp"]
     df_filtered["log_moneyness"] = np.log(df_filtered["strike"] / df_filtered["F_pcp"])
@@ -136,7 +150,7 @@ def fetch_spx_data():
         ((df_filtered["optionType"] == "call") & (df_filtered["strike"] > df_filtered["F_pcp"]))
     )
 
-    out_file = os.path.join(DATA_DIR, "spx_options_market_data.csv")
+    out_file = DATA_DIR / "spx_options_market_data.csv"
     df_filtered.to_csv(out_file, index=False)
     print(f"\n[✓] Saved {len(df_filtered)} clean European option quotes to: {out_file}")
     print(f"    Underlying spot: ${spot:.2f}, Strikes: [{df_filtered['strike'].min():.0f}, {df_filtered['strike'].max():.0f}]")

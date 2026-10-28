@@ -5,21 +5,22 @@ Difference Methods, 2nd ed.
 """
 
 import sys
-import os
 import warnings
+from pathlib import Path
+
 import matplotlib
 matplotlib.use("Agg")
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures")
-os.makedirs(FIGURES_DIR, exist_ok=True)
+PROJECT_ROOT = SCRIPT_DIR.parent
+FIGURES_DIR = PROJECT_ROOT / "figures"
+FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 from bs_analytical import bs_call
 from heat_transform import BSHeatTransform
@@ -28,10 +29,10 @@ from fdm_heat import HeatFDMSolver
 # Book example (Sects. 2.6.5, 8.1.5, 8.2.1); book gives c(E,0)/E = 0.0994
 E, T, r, D0, sigma = 100.0, 1.0, 0.10, 0.05, 0.20
 
-# Wider than the book's [ln 0.2, ln 2.3]: its approximate upper BC pollutes S ≳ 150.
-# x_l is a multiple of Δx so the payoff kink (x = 0) is a grid node.
+# Domain [x_l, x_u] chosen so the payoff kink (x = 0) is an exact grid node.
+# Boundary condition is the exact asymptotic call boundary u(x_u, τ̄) = exp(x_u + τ̄) - 1.
 x_l, x_u = -2.30, 1.60
-M, N = 390, 500          # Δx = 0.01, α = 0.4
+M, N = 390, 500          # Δx = 0.01, α = 0.40
 
 S_LO, S_HI = 50.0, 200.0
 
@@ -66,10 +67,10 @@ def main():
     print("=" * 72)
     print("Black-Scholes validation via the heat equation  (Zhu et al., 2nd ed.)")
     print("=" * 72)
-    print(f"  E = {E}, T = {T}, r = {r}, D0 = {D0}, σ = {sigma}")
-    print(f"  τ̄_max = {tb_max:.4f},   r-D0-σ²/2 = {ht.mu:.4f}")
-    print(f"  x ∈ [{x_l}, {x_u}]  (S at t=0 ∈ [{ht.x_to_S(x_l):.1f}, {ht.x_to_S(x_u):.1f}])")
-    print(f"  M = {M}, N = {N},  Δx = {solver.dx:.4f},  Δτ̄ = {solver.dtau:.2e},"
+    print(f"  Parameters: E = {E:.1f}, T = {T:.1f}, r = {r:.2f}, D0 = {D0:.2f}, σ = {sigma:.2f}")
+    print(f"  τ̄_max = {tb_max:.4f},   μ = r - D0 - σ²/2 = {ht.mu:.4f}")
+    print(f"  x ∈ [{x_l:.2f}, {x_u:.2f}]  (S at t=0 ∈ [{ht.x_to_S(x_l):.1f}, {ht.x_to_S(x_u):.1f}])")
+    print(f"  Grid: M = {M}, N = {N},  Δx = {solver.dx:.4f},  Δτ̄ = {solver.dtau:.2e},"
           f"  α = {solver.alpha:.3f}")
     print("=" * 72)
 
@@ -89,7 +90,8 @@ def main():
     roi = (S_grid >= S_LO) & (S_grid <= S_HI)
     xs_atm = ht.S_to_x(E, 0.0)
 
-    print(f"\n  Errors over S ∈ [{S_LO:.0f}, {S_HI:.0f}] ({roi.sum()} nodes)\n")
+    print(f"\n  Errors over S ∈ [{S_LO:.0f}, {S_HI:.0f}] ({roi.sum()} nodes)")
+    print(f"  (Evaluated at M = {M}, N = {N}, α = {solver.alpha:.3f})\n")
     print(f"  {'Scheme':<22} {'V(E,0)':>10} {'Max |err|':>11} {'RMSE':>11} {'ATM rel (%)':>12}")
     print("  " + "-" * 70)
     for name in schemes:
@@ -116,7 +118,7 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGURES_DIR, "prices_comparison.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "prices_comparison.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved prices_comparison.png")
 
@@ -144,7 +146,7 @@ def main():
     ax.grid(True, which="both", alpha=0.3)
 
     # Time convergence: compare against fine-N on the same grid to isolate the time error
-    print("  Running time-convergence study …")
+    print("  Running time-convergence study (M = 390 fixed, N ∈ [10..640], N_ref = 10000) …")
     N_values = np.array([10, 20, 40, 80, 160, 320, 640])
     N_ref = 10000
     ref_cn = atm_price(ht, M, N_ref, "solve_crank_nicolson")
@@ -164,7 +166,7 @@ def main():
     ax.grid(True, which="both", alpha=0.3)
 
     # Space convergence: Δx halves each time and x = 0 stays a node
-    print("  Running space-convergence study …")
+    print("  Running space-convergence study (N = 4000 fixed, M ∈ [78..1248]) …")
     M_values = np.array([78, 156, 312, 624, 1248])
     N_s = 4000
     err_M = np.array([abs(atm_price(ht, m, N_s, "solve_crank_nicolson") - V_exact_atm)
@@ -181,7 +183,7 @@ def main():
 
     fig.suptitle("Error analysis", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(os.path.join(FIGURES_DIR, "error_analysis.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "error_analysis.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved error_analysis.png")
     print(f"      observed order in time : implicit ≈ {np.log2(err_im[-2] / err_im[-1]):.2f},"
@@ -202,12 +204,11 @@ def main():
     ax.set_zlabel("u(x, τ̄)")
     ax.set_title("Heat-equation solution u(x, τ̄) — Crank-Nicolson (7.9)")
     fig.tight_layout()
-    fig.savefig(os.path.join(FIGURES_DIR, "heat_solution_surface.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "heat_solution_surface.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved heat_solution_surface.png")
 
     # ---- Plot 4: explicit stability, condition (8.7) ----
-    # Coarser grid so the unstable run has enough steps for errors to grow visibly.
     M_demo = 195                                        # Δx = 0.02
     dx_demo = (x_u - x_l) / M_demo
     N_crit = int(np.ceil(tb_max / (0.5 * dx_demo ** 2)))
@@ -235,16 +236,17 @@ def main():
     fig.suptitle("Explicit scheme stability, condition (8.7)  α = Δτ̄/Δx² ≤ 1/2",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(os.path.join(FIGURES_DIR, "stability_demo.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "stability_demo.png", dpi=150)
     plt.close(fig)
     print(f"[✓] Saved stability_demo.png  (unstable α={s_un.alpha:.3f}, N={N_unstable};"
           f" stable α={s_st.alpha:.3f}, N={N_stable})")
 
     # ---- Plot 5: simultaneous (M, N) refinement with constant α = 0.40 ----
-    print("  Running simultaneous (M, N) study with constant α = 0.40 …")
     alpha_const = 0.40
     M_const = np.array([78, 156, 312, 624, 1248])
     N_const = np.array([int(round(tb_max / (alpha_const * ((x_u - x_l) / m) ** 2))) for m in M_const])
+    print(f"  Running simultaneous (M, N) study with constant α = {alpha_const:.2f} …")
+    print(f"    Grid sizes: M = {M_const.tolist()}, N = {N_const.tolist()}")
 
     err_exp_const, err_cn_const, err_im_const = [], [], []
     spatial_profiles = []
@@ -302,7 +304,7 @@ def main():
     fig.suptitle(rf"Simultaneous $(M, N)$ Refinement at Constant Mesh Ratio $\alpha = \Delta\bar\tau / \Delta x^2 = {alpha_const:.2f}$",
                  fontsize=13, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(os.path.join(FIGURES_DIR, "constant_alpha_analysis.png"), dpi=150)
+    fig.savefig(FIGURES_DIR / "constant_alpha_analysis.png", dpi=150)
     plt.close(fig)
     print("[✓] Saved constant_alpha_analysis.png")
     print(f"      observed order at constant α: Explicit ≈ {np.log2(err_exp_const[-2] / err_exp_const[-1]):.2f},"
